@@ -1,0 +1,154 @@
+---
+title: "PSYR6003_Assignment2_Script"
+format: docx
+editor: visual
+Author: Mikaela Ethier-Gagnon
+---
+
+## PSYR6003 Assignment 2: The General Linear Model
+
+Setting the working directory and loading all libraries necessary for analyses:
+
+```{r}
+setwd("/Users/mikaelaethier/Desktop/Dalhousie/PSYR6003/PSYR6003 Assignment 2/PSYR6003_Assignment2")
+library(tidyverse)
+library(readxl)
+library(haven)
+library(flexplot)
+library(dplyr)
+library(car)
+library(apaTables)
+```
+
+Data management and cleaning:
+
+```{r}
+#reading in the dataset
+data<-read_spss("PSYR6003.A2.sav")
+#counting the number of participants in the dataset prior to data cleaning 
+count(data) #N=137
+#removing any incomplete cases from the dataset
+newdata<-na.omit(data) 
+#counting the number of remaining participants 
+count(newdata) #N=132
+#Following visual inspection, there is only one participant identifying as non-binary. For the purposes of these analyses, this participant will be excluded 
+newdata<-filter(data, sex !="Other (specify)") #filtering them out 
+#sex is currently a string variable, and must be dummy coded to a factor (male=1, female=0)
+newdata <- mutate(data, sex = if_else(sex=="Male", 1, 0))
+#We now have to create subscales for socially prescribed perfectionism (SPP), conscientiousness, and negative affect
+#Take the mean of all the constituent items in each measure to get subscale totals.
+#item tipm.CONS2.3y for conscientiousness must be reverse-coded
+#Let's start by reverse coding the item: 
+recoded_variable<-Recode(newdata$tipm.CONS2.3y,"1=7; 2=6; 3=5; 4=4; 5=3; 6=2; 7=1", as.numeric=TRUE)
+newdata$tipm.CONS2.3y=recoded_variable #putting the recoded variable into the dataset 
+#Now creating subscale totals by taking the mean of all constituents 
+subscale_data<-mutate(newdata, SPP=rowMeans(across(mps.SPP1.3y:mps.SPP5.3y)),
+                      negative_affect=rowMeans(across(guilt1.3y:host3.3y)), 
+                      conscientiousness=rowMeans(across(tipm.CONS1.3y:tipm.CONS2.3y)), na.rm=TRUE)
+                      
+#ensuring that all incomplete data in the current dataset has been removed 
+subscale_data<-na.omit(subscale_data)
+count(subscale_data) #N=132, we are good to move onto the next step! 
+
+```
+
+Descriptive statistics:
+
+```{r}
+#determining the frequency of males in dataset 
+count(subscale_data, sex=="1") ##19 males, 113 females
+#Creating an APA table with means, standard deviations, and bivariate correlations for the variables of interest 
+##Starting by creating an object with only the variables of interest
+tabledata <- select(subscale_data, SPP, conscientiousness, negative_affect, sex)
+#Then using the apaTables package to save a correlation table as a word document  
+table1 <- apa.cor.table(tabledata, 
+                        table.number=1, filename = "Table1.doc")
+```
+
+Testing Hypothesis 1: H1: Sex, conscientiousness, and SPP will all significantly predict negative affect. Specifically, women tend to have more negative affect than men and conscientiousness tends to be negatively related to negative affect. Higher SPP is expected to be associated with higher negative affect. Sex, conscientiousness, and SPP are expected to covary.
+
+```{r}
+#Starting with H1: Sex, conscientiousness, and SPP are predictors of negative affect. This type of analysis requires a multiple regression. 
+#full model: negative_affect=b0+b1xsex+b2xconscientiousness+b3xSPP+e 
+#parameters of interest are sex, conscientiousness, and SPP 
+#Reduced model: negative_affect=b0+e
+
+#Step 1: Visualize the univariate distributions
+#visualizing sex
+a=flexplot(sex~1, data=subscale_data) + theme_classic()
+#Visualize conscientiousness
+b=flexplot(conscientiousness~1, data=subscale_data) + theme_classic()
+#Visualize SPP 
+c=flexplot(SPP~1, data=subscale_data) + theme_classic()
+#Visualize negative affect 
+d=flexplot(negative_affect~1, data=subscale_data) + theme_classic()
+library(patchwork) #lets you put plots into a single picture 
+a+b+c+d
+#participants appear to me mostly female
+#conscientiousness appears positively skewed 
+#SPP appears but positively skewed 
+#negative affect negatively skewed
+#No obvious issues in the dataset (e.g., high leverage points), let's move onto the next step. 
+
+#Step 2: Visualize the multivariate relationship or the model, using a black ghost line to compare the center panel with the rest 
+flexplot(negative_affect~sex | conscientiousness + SPP, data=subscale_data, method = "lm",
+         ghost.line = "black") + theme_classic()
+##Visually, trends are difficult to predict. Differences across levels of conscientiousness or SPP appear either very small or are unclear. However, very few males reported high conscientiousness. There does appear to be overall lower negative affect in males. 
+#Step 3: Run Diagnostics 
+# fit a linear model
+model = lm(negative_affect~sex + conscientiousness + SPP, data=subscale_data) 
+#visualize the model 
+visualize(model, plot="model") + theme_classic()
+#visualize the residuals 
+visualize(model, plot="residuals") + theme_classic() #check to see if all assumptions are met 
+##If all assumptions are met: Should be a bell curve for normality, flat line for RD plot for linearity, and flat line in SL plot for homogeneity of variance/homoskedasticity
+#Residuals are pretty normally distributed with a slight negative skew, could be a violation of normality. The RD plot is slightly curved but does not appear to be influenced by outliers, there appears to be a violation of linearity. The SL plot is also not completely flat, suggesting a violation of homogeneity of variance. 
+
+#Now, we can attempt to check whether these violations of assumptions matter 
+#Slight skew from normality, lets do a sensitivity analysis to check to see if this violation matters
+library(MASS)
+robust_model = rlm(negative_affect~sex + conscientiousness + SPP, data=subscale_data)
+#Now visualize the robust model and compare 
+visualize(robust_model, plot="model") + theme_classic()
+##The lines of best fit do not appear to change, the robust model is no better than the original, we can ignore the violation of the assumption of normality
+##There also appeared to be a violation of linearity, the model may better fit a quadratic
+multiple_reg_model = lm(negative_affect~sex +SPP+ conscientiousness + I(SPP^2) +I(conscientiousness^2), data=subscale_data)
+visualize(multiple_reg_model, plot="residuals") + theme_classic()
+#RD plot is a straighter line, the model therefore better fits a linear model, we will ignore this deviation from the assumption of linearity
+###though there appears to be a violation of heterogeneity of variance, fixing this is beyond the scope of this course (as mentioned in lecture), however, there are several ways to go about this: Transformation of the Dependent Variable, Weighted Least Squares (WLS), Robust Standard Errors, Generalized Least Squares (GLS). 
+#Step 4: Get results 
+#Start with a traditional summary
+summary(model)
+#flexplot version
+estimates(model)
+#creating an APA style table for the output 
+table2<-apa.reg.table(model,
+                      table.number = 2, filename ="table2.doc")
+```
+
+Testing Hypothesis 2: SPP will predict unique variance in negative affect over and above sex and conscientiousness in a meaningful way.
+
+```{r}
+#SPP is the predictor, negative affect is the outcome, we are controlling for sex and conscientiousness 
+#full model: negative affect= b0 + b1xSPP +b2xconscientiousness +b3xsex +e 
+#reduced model: negative affect= b0 +b1xconscientiousness +b2xsex +e
+#We have already visualized the univariate and multivariate distributions 
+#We have already tested the assumptions for residuals in the previous step
+
+#visualize the mode with covariates: 
+added.plot(negative_affect~sex +conscientiousness +SPP, data=subscale_data) + theme_classic()
+##There appears to be a very weak positive relationship between SPP and negative affect when controlling for conscientiousness and SPP, consistent with our estimates from above. 
+
+#now interpret the model 
+#Do model comparison
+reduced <- lm(negative_affect~sex + conscientiousness, data=subscale_data)
+full <- lm(negative_affect~sex + conscientiousness+ SPP, data=subscale_data)
+#compare the models
+model.comparison(reduced, full)
+##the full model is a better fit to the data as it predicts 8.6% more variance than the reduced model, is significantly different from the reduced model (p<0.001), the bayes factor is greater than 100 indicating decisive evidence to chose this model, and the AIC and BIC are smaller for the full model 
+#Estimates for the full model (these will be the same as above)
+estimates(full)
+
+#Summary
+summary(full)
+```
